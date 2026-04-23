@@ -2,11 +2,11 @@
   import { onMount } from "svelte";
   import { save } from "@tauri-apps/plugin-dialog";
   import Editor from "$lib/Editor.svelte";
-  import Calendar from "$lib/Calendar.svelte";
-  import NoteList from "$lib/NoteList.svelte";
+  import FolderPanel from "$lib/FolderPanel.svelte";
+  import FileList from "$lib/FileList.svelte";
   import SearchBar from "$lib/SearchBar.svelte";
   import StatusBar from "$lib/StatusBar.svelte";
-  import { notes, dates, ui } from "$lib/stores.svelte";
+  import { notes, dates, ui, folders } from "$lib/stores.svelte";
   import { api, localDay } from "$lib/ipc";
 
   let editorRef: { focus: () => void; flushSave: () => Promise<void> } | undefined = $state();
@@ -19,30 +19,12 @@
   async function newNote() {
     await editorRef?.flushSave();
     const today = localDay(new Date());
-    // jeśli user patrzy na dzisiaj — ok; jeśli na inny dzień, i tak
-    // created_at = now() (zachowanie "nowa notatka dotyczy teraz")
     dates.selectedDay = today;
     dates.calendarDate = new Date();
     await notes.createAndLoad();
     await notes.refreshMonth(dates.year, dates.month);
     await notes.refreshDay(today);
     editorRef?.focus();
-  }
-
-  async function deleteCurrent() {
-    const n = notes.current;
-    if (!n) return;
-    const ok = confirm("Usunąć tę notatkę? Tej operacji nie można cofnąć.");
-    if (!ok) return;
-    await api.deleteNote(n.id);
-    await notes.refreshMonth(dates.year, dates.month);
-    await notes.refreshDay(dates.selectedDay);
-    if (notes.dayList.length > 0) {
-      await notes.load(notes.dayList[notes.dayList.length - 1].id);
-    } else {
-      notes.current = null;
-      await newNote();
-    }
   }
 
   async function exportCurrent() {
@@ -63,33 +45,35 @@
     const mod = e.ctrlKey || e.metaKey;
     if (!mod) return;
     const k = e.key.toLowerCase();
-    if (k === "n") {
+    if (k === "s") {
       e.preventDefault();
-      newNote();
+      editorRef?.flushSave();
     } else if (k === "f") {
       e.preventDefault();
       ui.searchOpen = true;
-    } else if (k === "e") {
-      e.preventDefault();
-      exportCurrent();
     } else if (k === "t") {
       e.preventDefault();
       ui.toggleTimestamps();
-    } else if (k === "delete" || e.key === "Delete") {
-      e.preventDefault();
-      deleteCurrent();
     }
   }
 
   onMount(async () => {
     await ui.loadFromMeta();
+    await folders.loadFolders();
+    await folders.loadAutosave();
+
+    // Załaduj ostatnią notatkę jako fallback gdy brak pliku
     await notes.refreshMonth(dates.year, dates.month);
     await notes.refreshDay(dates.selectedDay);
     if (notes.dayList.length > 0) {
-      // załaduj ostatnią notatkę dnia, nie twórz nowej (welcome note się policzy)
       await notes.load(notes.dayList[notes.dayList.length - 1].id);
     } else {
       await newNote();
+    }
+
+    // Jeśli jest zapisany folder — odśwież jego pliki
+    if (folders.selectedFolder) {
+      await folders.selectFolder(folders.selectedFolder);
     }
   });
 </script>
@@ -100,15 +84,14 @@
   <aside class="sidebar">
     <div class="brand">
       <span class="logo">MM.DD</span>
-      <button type="button" class="new" onclick={newNote} title="Ctrl+N — nowa notatka">+ Nowa</button>
     </div>
-    <Calendar />
-    <NoteList />
+    <FolderPanel />
+    <FileList />
   </aside>
 
   <section class="editor-pane">
     <Editor bind:this={editorRef} dark={effectiveDark} />
-    <StatusBar />
+    <StatusBar onSave={() => editorRef?.flushSave()} />
   </section>
 
   <SearchBar />
@@ -127,7 +110,6 @@
   }
 
   main {
-    /* Zmienne motywu — jasny domyślnie */
     --bg: #fcfcfc;
     --bg-2: #f3f3f3;
     --fg: #1a1a1a;
@@ -161,30 +143,19 @@
     background: var(--bg-2);
     border-right: 1px solid var(--border);
     min-height: 0;
+    overflow: hidden;
   }
   .brand {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     padding: 12px;
     border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
   }
   .logo {
     font-weight: 700;
     letter-spacing: 0.5px;
     color: var(--fg);
-  }
-  .new {
-    background: var(--accent);
-    color: var(--accent-fg);
-    border: none;
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .new:hover {
-    filter: brightness(1.1);
   }
   .editor-pane {
     display: flex;

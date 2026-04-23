@@ -234,3 +234,121 @@ pub fn set_meta(db: State<'_, Db>, key: String, value: String) -> Result<(), Str
 pub fn count_words(content: String) -> u32 {
     content.split_whitespace().count() as u32
 }
+
+// ─── Folder / file browser ────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MdFileInfo {
+    pub name: String,
+    pub path: String,
+    /// -1 = zwykły plik; 0+ = pozycja na liście priorytetowej
+    pub priority_index: i32,
+}
+
+const DEFAULT_PRIORITY: &[&str] = &[
+    "CLAUDE.md",
+    "PLAN.md",
+    "ARCHITECTURE.md",
+    "CONVENTIONS.md",
+    "README.md",
+];
+
+fn load_priority_list(c: &rusqlite::Connection) -> Vec<String> {
+    let json: Option<String> = c
+        .query_row("SELECT value FROM meta WHERE key = 'priority_files'", [], |r| r.get(0))
+        .ok();
+    json.and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_else(|| DEFAULT_PRIORITY.iter().map(|s| s.to_string()).collect())
+}
+
+fn load_folders_vec(c: &rusqlite::Connection) -> Vec<String> {
+    let json: Option<String> = c
+        .query_row("SELECT value FROM meta WHERE key = 'folders'", [], |r| r.get(0))
+        .ok();
+    json.and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default()
+}
+
+fn save_folders_vec(c: &rusqlite::Connection, folders: &[String]) -> anyhow::Result<()> {
+    let json = serde_json::to_string(folders)?;
+    c.execute(
+        "INSERT INTO meta(key, value) VALUES ('folders', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![json],
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_folders(db: State<'_, Db>) -> Result<Vec<String>, String> {
+    db.with_conn(|c| Ok(load_folders_vec(c)))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_folder(db: State<'_, Db>, path: String) -> Result<(), String> {
+    db.with_conn(|c| {
+        let mut folders = load_folders_vec(c);
+        if !folders.contains(&path) {
+            folders.push(path);
+        }
+        save_folders_vec(c, &folders)
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_folder(db: State<'_, Db>, path: String) -> Result<(), String> {
+    db.with_conn(|c| {
+        let mut folders = load_folders_vec(c);
+        folders.retain(|f| f != &path);
+        save_folders_vec(c, &folders)
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_md_files(db: State<'_, Db>, folder: String) -> Result<Vec<MdFileInfo>, String> {
+    let priority: Vec<String> = db
+        .with_conn(|c| Ok(load_priority_list(c)))
+        .map_err(|e| e.to_string())?;
+
+    let dir = std::path::Path::new(&folder);
+    let mut files: Vec<MdFileInfo> = std::fs::read_dir(dir)
+        .map_err(|e| format!("Nie można otworzyć folderu: {}", e))?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let p = e.path();
+            p.is_file() && p.extension().map(|x| x.eq_ignore_ascii_case("md")).unwrap_or(false)
+        })
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let path = e.path().to_string_lossy().replace('\\', "/");
+            let priority_index = priority
+                .iter()
+                .position(|p| p.eq_ignore_ascii_case(&name))
+                .map(|i| i as i32)
+                .unwrap_or(-1);
+            MdFileInfo { name, path, priority_index }
+        })
+        .collect();
+
+    files.sort_by(|a, b| match (a.priority_index, b.priority_index) {
+        (ai, bi) if ai >= 0 && bi >= 0 => ai.cmp(&bi),
+        (ai, _) if ai >= 0 => std::cmp::Ordering::Less,
+        (_, bi) if bi >= 0 => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+
+    Ok(files)
+}
+
+#[tauri::command]
+pub fn read_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Błąd odczytu: {}", e))
+}
+
+#[tauri::command]
+pub fn write_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content.as_bytes()).map_err(|e| format!("Błąd zapisu: {}", e))
+}

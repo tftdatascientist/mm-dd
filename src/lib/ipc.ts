@@ -19,6 +19,12 @@ export interface SearchHit {
   snippet_html: string;
 }
 
+export interface MdFileInfo {
+  name: string;
+  path: string;
+  priority_index: number; // -1 = zwykły; 0+ = priorytetowy
+}
+
 export const api = {
   createNote: () => invoke<number>("create_note"),
   updateNote: (id: number, content: string) =>
@@ -37,6 +43,14 @@ export const api = {
   setMeta: (key: string, value: string) =>
     invoke<void>("set_meta", { key, value }),
   countWords: (content: string) => invoke<number>("count_words", { content }),
+  // folder browser
+  listFolders: () => invoke<string[]>("list_folders"),
+  addFolder: (path: string) => invoke<void>("add_folder", { path }),
+  removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
+  listMdFiles: (folder: string) => invoke<MdFileInfo[]>("list_md_files", { folder }),
+  readFile: (path: string) => invoke<string>("read_file", { path }),
+  writeFile: (path: string, content: string) =>
+    invoke<void>("write_file", { path, content }),
 };
 
 /** ISO8601 UTC -> "YYYY-MM-DD" w lokalnej strefie */

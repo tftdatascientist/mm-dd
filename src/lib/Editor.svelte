@@ -6,7 +6,7 @@
   import { markdown } from "@codemirror/lang-markdown";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from "@codemirror/language";
-  import { notes } from "./stores.svelte";
+  import { notes, folders } from "./stores.svelte";
   import { api } from "./ipc";
 
   interface Props {
@@ -17,6 +17,7 @@
   let container: HTMLDivElement | undefined = $state();
   let view: EditorView | null = null;
   let currentId: number | null = null;
+  let currentFilePath: string | null = null;
   let saveTimer: number | null = null;
   let pendingContent: string | null = null;
 
@@ -27,29 +28,43 @@
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    if (pendingContent !== null && currentId !== null) {
+    if (pendingContent !== null) {
       const content = pendingContent;
-      const id = currentId;
       pendingContent = null;
-      notes.saveStatus = "saving";
-      try {
-        await api.updateNote(id, content);
-        if (notes.current && notes.current.id === id) {
-          notes.current = { ...notes.current, content, updated_at: new Date().toISOString() };
+
+      if (currentFilePath !== null) {
+        await folders.save(content);
+      } else if (currentId !== null) {
+        const id = currentId;
+        notes.saveStatus = "saving";
+        try {
+          await api.updateNote(id, content);
+          if (notes.current && notes.current.id === id) {
+            notes.current = { ...notes.current, content, updated_at: new Date().toISOString() };
+          }
+          notes.saveStatus = "saved";
+        } catch (err) {
+          console.error("save error:", err);
+          notes.saveStatus = "dirty";
         }
-        notes.saveStatus = "saved";
-      } catch (err) {
-        console.error("save error:", err);
-        notes.saveStatus = "dirty";
       }
     }
   }
 
   function scheduleSave(content: string) {
     pendingContent = content;
-    notes.saveStatus = "dirty";
-    if (saveTimer !== null) clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+
+    if (currentFilePath !== null) {
+      folders.saveStatus = "dirty";
+      if (folders.autosave) {
+        if (saveTimer !== null) clearTimeout(saveTimer);
+        saveTimer = window.setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+      }
+    } else {
+      notes.saveStatus = "dirty";
+      if (saveTimer !== null) clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+    }
   }
 
   function buildState(doc: string): EditorState {
@@ -69,7 +84,9 @@
       }),
       EditorView.domEventHandlers({
         blur: () => {
-          flushSave();
+          if (currentFilePath === null || folders.autosave) {
+            flushSave();
+          }
           return false;
         },
       }),
@@ -78,24 +95,37 @@
     return EditorState.create({ doc, extensions: exts });
   }
 
-  // Reaguj na zmianę notes.current — przeładuj editor
+  // Tryb notatkowy — ładuje notatkę z bazy gdy nie ma wybranego pliku
   $effect(() => {
     const note = notes.current;
-    if (!view || !note) return;
+    const file = folders.selectedFile;
+    if (!view || !note || file !== null) return;
     if (note.id === currentId) return;
-    // zapisz poprzednią zanim przełączysz
     flushSave();
     currentId = note.id;
+    currentFilePath = null;
     view.setState(buildState(note.content));
     view.focus();
   });
 
-  // Reaguj na zmianę darkmode
+  // Tryb plikowy — ładuje plik z dysku gdy fileVersion się zmieni (po async read)
   $effect(() => {
-    // odtwórz state by wymienić theme
+    const ver = folders.fileVersion;
+    const file = folders.selectedFile;
+    const content = folders.fileContent;
+    void ver;
+    if (!view || !file) return;
+    flushSave();
+    currentFilePath = file.path;
+    currentId = null;
+    view.setState(buildState(content));
+    view.focus();
+  });
+
+  // Przebuduj theme gdy zmieni się dark mode
+  $effect(() => {
     if (!view) return;
     const doc = view.state.doc.toString();
-    // no-op jeśli to samo
     void dark;
     view.setState(buildState(doc));
   });
@@ -108,7 +138,6 @@
     });
     currentId = notes.current?.id ?? null;
     view.focus();
-
     window.addEventListener("beforeunload", flushSave);
   });
 

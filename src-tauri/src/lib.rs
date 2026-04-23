@@ -60,6 +60,12 @@ pub fn run() {
             commands::get_meta,
             commands::set_meta,
             commands::count_words,
+            commands::list_folders,
+            commands::add_folder,
+            commands::remove_folder,
+            commands::list_md_files,
+            commands::read_file,
+            commands::write_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
