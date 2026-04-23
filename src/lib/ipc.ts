@@ -51,6 +51,8 @@ export const api = {
   readFile: (path: string) => invoke<string>("read_file", { path }),
   writeFile: (path: string, content: string) =>
     invoke<void>("write_file", { path, content }),
+  createMdFile: (folder: string, name: string) =>
+    invoke<string>("create_md_file", { folder, name }),
 };
 
 /** ISO8601 UTC -> "YYYY-MM-DD" w lokalnej strefie */

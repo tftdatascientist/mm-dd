@@ -1,6 +1,13 @@
 import type { Note, NoteSummary, MdFileInfo } from "./ipc";
 import { api, localDay } from "./ipc";
 
+export interface FolderGroup {
+  id: string;
+  name: string;
+  collapsed: boolean;
+  folderPaths: string[];
+}
+
 /** Stan edytora / wybranej notatki */
 class NoteStore {
   current = $state<Note | null>(null);
@@ -60,7 +67,7 @@ class DateStore {
 
 class UiStore {
   showTimestamps = $state<boolean>(false);
-  darkMode = $state<boolean | null>(null); // null = system
+  darkMode = $state<boolean | null>(null);
   searchOpen = $state<boolean>(false);
 
   async loadFromMeta() {
@@ -87,6 +94,8 @@ class UiStore {
 
 class FolderStore {
   folders = $state<string[]>([]);
+  aliases = $state<Record<string, string>>({});
+  groups = $state<FolderGroup[]>([]);
   selectedFolder = $state<string | null>(null);
   files = $state<MdFileInfo[]>([]);
   selectedFile = $state<MdFileInfo | null>(null);
@@ -98,27 +107,122 @@ class FolderStore {
 
   async loadFolders() {
     this.folders = await api.listFolders();
+    await Promise.all([this.loadAliases(), this.loadGroups()]);
+    const last = await api.getMeta("last_folder");
+    if (last && this.folders.includes(last)) {
+      this.selectedFolder = last;
+    }
   }
+
+  async loadAliases() {
+    const json = await api.getMeta("folder_aliases");
+    if (json) {
+      try { this.aliases = JSON.parse(json); } catch { this.aliases = {}; }
+    }
+  }
+
+  async setAlias(path: string, alias: string) {
+    const trimmed = alias.trim();
+    const updated = { ...this.aliases };
+    if (trimmed) {
+      updated[path] = trimmed;
+    } else {
+      delete updated[path];
+    }
+    this.aliases = updated;
+    await api.setMeta("folder_aliases", JSON.stringify(this.aliases));
+  }
+
+  // ── Grupy ────────────────────────────────────────────────────────────────
+
+  async loadGroups() {
+    const json = await api.getMeta("folder_groups");
+    if (json) {
+      try { this.groups = JSON.parse(json); } catch { this.groups = []; }
+    }
+  }
+
+  async saveGroups() {
+    await api.setMeta("folder_groups", JSON.stringify(this.groups));
+  }
+
+  async createGroup(name: string, folderPath: string) {
+    const id = `g_${Date.now()}`;
+    // Usuń folder z innych grup
+    this.groups = this.groups.map(g => ({
+      ...g,
+      folderPaths: g.folderPaths.filter(p => p !== folderPath),
+    }));
+    this.groups = [...this.groups, { id, name, collapsed: false, folderPaths: [folderPath] }];
+    await this.saveGroups();
+  }
+
+  async addToGroup(groupId: string, folderPath: string) {
+    this.groups = this.groups.map(g => {
+      if (g.id === groupId) {
+        if (g.folderPaths.includes(folderPath)) return g;
+        return { ...g, folderPaths: [...g.folderPaths, folderPath] };
+      }
+      return { ...g, folderPaths: g.folderPaths.filter(p => p !== folderPath) };
+    });
+    await this.saveGroups();
+  }
+
+  async removeFromGroup(folderPath: string) {
+    this.groups = this.groups.map(g => ({
+      ...g,
+      folderPaths: g.folderPaths.filter(p => p !== folderPath),
+    }));
+    await this.saveGroups();
+  }
+
+  async renameGroup(groupId: string, name: string) {
+    this.groups = this.groups.map(g => g.id === groupId ? { ...g, name } : g);
+    await this.saveGroups();
+  }
+
+  async deleteGroup(groupId: string) {
+    this.groups = this.groups.filter(g => g.id !== groupId);
+    await this.saveGroups();
+  }
+
+  async toggleGroupCollapsed(groupId: string) {
+    this.groups = this.groups.map(g =>
+      g.id === groupId ? { ...g, collapsed: !g.collapsed } : g
+    );
+    await this.saveGroups();
+  }
+
+  // ── Foldery ───────────────────────────────────────────────────────────────
 
   async addFolder(path: string) {
     await api.addFolder(path);
     if (!this.folders.includes(path)) {
       this.folders = [...this.folders, path];
     }
-    if (this.folders.length === 1) {
-      await this.selectFolder(path);
-    }
+    await this.selectFolder(path);
   }
 
   async removeFolder(path: string) {
     await api.removeFolder(path);
     this.folders = this.folders.filter((f) => f !== path);
+    if (this.aliases[path]) await this.setAlias(path, "");
+    // Wyczyść z grup
+    const inGroup = this.groups.some(g => g.folderPaths.includes(path));
+    if (inGroup) {
+      this.groups = this.groups.map(g => ({
+        ...g,
+        folderPaths: g.folderPaths.filter(p => p !== path),
+      }));
+      await this.saveGroups();
+    }
     if (this.selectedFolder === path) {
       this.selectedFolder = null;
       this.files = [];
       this.selectedFile = null;
       this.fileContent = "";
       this.saveStatus = "idle";
+      await api.setMeta("last_folder", "");
     }
   }
 
@@ -128,6 +232,7 @@ class FolderStore {
     this.fileContent = "";
     this.saveStatus = "idle";
     this.files = await api.listMdFiles(path);
+    await api.setMeta("last_folder", path);
   }
 
   async selectFile(file: MdFileInfo) {

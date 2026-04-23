@@ -246,6 +246,7 @@ pub struct MdFileInfo {
 }
 
 const DEFAULT_PRIORITY: &[&str] = &[
+    "ROADMAP.md",
     "CLAUDE.md",
     "PLAN.md",
     "ARCHITECTURE.md",
@@ -351,4 +352,25 @@ pub fn read_file(path: String) -> Result<String, String> {
 #[tauri::command]
 pub fn write_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content.as_bytes()).map_err(|e| format!("Błąd zapisu: {}", e))
+}
+
+#[tauri::command]
+pub fn create_md_file(folder: String, name: String) -> Result<String, String> {
+    let mut file_name = name.trim().to_string();
+    if !file_name.to_lowercase().ends_with(".md") {
+        file_name.push_str(".md");
+    }
+    let file_name: String = file_name
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    if file_name.is_empty() || file_name == ".md" {
+        return Err("Nieprawidłowa nazwa pliku".to_string());
+    }
+    let path = std::path::Path::new(&folder).join(&file_name);
+    if path.exists() {
+        return Err(format!("Plik '{}' już istnieje", file_name));
+    }
+    std::fs::write(&path, b"").map_err(|e| format!("Błąd tworzenia pliku: {}", e))?;
+    Ok(path.to_string_lossy().replace('\\', "/"))
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { EditorState } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -109,12 +109,13 @@
   });
 
   // Tryb plikowy — ładuje plik z dysku gdy fileVersion się zmieni (po async read)
+  // fileContent czytamy przez untrack żeby auto-save nie resetował kursora
   $effect(() => {
     const ver = folders.fileVersion;
     const file = folders.selectedFile;
-    const content = folders.fileContent;
     void ver;
     if (!view || !file) return;
+    const content = untrack(() => folders.fileContent);
     flushSave();
     currentFilePath = file.path;
     currentId = null;

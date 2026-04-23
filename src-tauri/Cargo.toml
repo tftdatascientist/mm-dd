@@ -1,6 +1,6 @@
 [package]
 name = "mm-dd"
-version = "0.1.0"
+version = "0.2.0"
 description = "MM.DD — lekki notatnik Markdown z nawigacją po datach"
 authors = ["MM.DD"]
 edition = "2021"
